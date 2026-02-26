@@ -22,6 +22,7 @@ const defaultForm = {
   quantity: 1,
   price:    999.99,
   status:   'CREATED',
+  message:  '',
 }
 
 function randomOrder() {
@@ -146,6 +147,15 @@ export default function ProducerPanel() {
         >
           {STATUSES.map((s) => <option key={s}>{s}</option>)}
         </select>
+
+        <label>Message</label>
+        <textarea
+          value={form.message}
+          onChange={(e) => setForm({ ...form, message: e.target.value })}
+          placeholder="Optional note or custom message..."
+          rows={2}
+          disabled={streaming}
+        />
 
         <button
           className="btn btn-primary"

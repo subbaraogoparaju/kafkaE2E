@@ -50,9 +50,32 @@
 }
 
 .form input:disabled,
-.form select:disabled {
+.form select:disabled,
+.form textarea:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.form textarea {
+  background: #1a1d2e;
+  border: 1px solid #2d3148;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 7px 10px;
+  font-size: 0.88rem;
+  font-family: inherit;
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+
+.form textarea:focus {
+  border-color: #6366f1;
+}
+
+.form textarea::placeholder {
+  color: #475569;
 }
 
 .form select option {

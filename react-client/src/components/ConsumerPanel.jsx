@@ -69,6 +69,9 @@ export default function ConsumerPanel() {
               <span>×{e.quantity}</span>
               <span className="event-price">${e.price?.toFixed(2)}</span>
             </div>
+            {e.message && (
+              <div className="event-message">{e.message}</div>
+            )}
           </div>
         ))}
       </div>

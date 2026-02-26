@@ -9,6 +9,7 @@ public class OrderEvent {
     private int quantity;
     private double price;
     private String status;
+    private String message;
     private LocalDateTime eventTime;
 
     public OrderEvent() {
@@ -38,6 +39,9 @@ public class OrderEvent {
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
 
+    public String getMessage() { return message; }
+    public void setMessage(String message) { this.message = message; }
+
     public LocalDateTime getEventTime() { return eventTime; }
     public void setEventTime(LocalDateTime eventTime) { this.eventTime = eventTime; }
 
@@ -45,6 +49,6 @@ public class OrderEvent {
     public String toString() {
         return "OrderEvent{orderId='" + orderId + "', product='" + product +
                "', quantity=" + quantity + ", price=" + price +
-               ", status='" + status + "', eventTime=" + eventTime + "}";
+               ", status='" + status + "', message='" + message + "', eventTime=" + eventTime + "}";
     }
 }
