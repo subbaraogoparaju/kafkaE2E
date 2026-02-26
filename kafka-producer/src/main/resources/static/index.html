@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kafka Order Events Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Header ── */
+        header {
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            padding: 14px 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-shrink: 0;
+        }
+        header h1 { font-size: 18px; font-weight: 600; color: #f0f6fc; }
+        .kafka-badge {
+            background: #e3522f;
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 8px;
+            border-radius: 4px;
+            letter-spacing: 0.8px;
+        }
+        .flow-hint {
+            margin-left: auto;
+            font-size: 12px;
+            color: #8b949e;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .flow-hint span { color: #58a6ff; }
+
+        /* ── Main layout ── */
+        .main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .divider {
+            width: 1px;
+            background: #30363d;
+            flex-shrink: 0;
+        }
+
+        /* ── Panel header ── */
+        .panel-header {
+            padding: 14px 24px;
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
+        .panel-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .panel-title h2 { font-size: 14px; font-weight: 600; color: #f0f6fc; }
+
+        .tag {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 4px;
+            letter-spacing: 0.5px;
+        }
+        .tag-producer { background: rgba(88,166,255,0.15); color: #58a6ff; border: 1px solid rgba(88,166,255,0.3); }
+        .tag-consumer { background: rgba(63,185,80,0.15); color: #3fb950; border: 1px solid rgba(63,185,80,0.3); }
+
+        .port-label { font-size: 12px; color: #6e7681; font-family: monospace; }
+
+        /* ── Panel content ── */
+        .panel-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 24px;
+        }
+
+        /* ── Form ── */
+        .form-group { margin-bottom: 14px; }
+
+        label {
+            display: block;
+            font-size: 11px;
+            font-weight: 600;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            margin-bottom: 5px;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 9px 12px;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.15s;
+        }
+        input:focus, select:focus { border-color: #58a6ff; }
+        select option { background: #1c2128; }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .send-btn {
+            width: 100%;
+            padding: 11px;
+            background: #238636;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .send-btn:hover { background: #2ea043; }
+        .send-btn:active { background: #1a7f37; }
+        .send-btn:disabled { background: #21262d; color: #6e7681; cursor: not-allowed; }
+
+        /* ── Sent log ── */
+        .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            margin: 20px 0 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .count-badge {
+            background: #21262d;
+            color: #8b949e;
+            font-size: 11px;
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+
+        /* ── Event cards ── */
+        .event-card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-left: 3px solid #30363d;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            animation: slideIn 0.25s ease;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .event-card.CREATED   { border-left-color: #58a6ff; }
+        .event-card.CONFIRMED { border-left-color: #3fb950; }
+        .event-card.SHIPPED   { border-left-color: #d29922; }
+        .event-card.DELIVERED { border-left-color: #39d353; }
+        .event-card.CANCELLED { border-left-color: #f85149; }
+
+        .event-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+        .event-id {
+            font-family: monospace;
+            font-size: 11px;
+            color: #6e7681;
+        }
+        .status-pill {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 20px;
+            letter-spacing: 0.5px;
+        }
+        .status-pill.CREATED   { background: rgba(88,166,255,0.15); color: #58a6ff; }
+        .status-pill.CONFIRMED { background: rgba(63,185,80,0.15);  color: #3fb950; }
+        .status-pill.SHIPPED   { background: rgba(210,153,34,0.15); color: #d29922; }
+        .status-pill.DELIVERED { background: rgba(57,211,83,0.15);  color: #39d353; }
+        .status-pill.CANCELLED { background: rgba(248,81,73,0.15);  color: #f85149; }
+
+        .event-product {
+            font-weight: 600;
+            color: #e6edf3;
+            font-size: 14px;
+            margin-bottom: 3px;
+        }
+        .event-meta {
+            color: #8b949e;
+            font-size: 12px;
+            display: flex;
+            gap: 12px;
+        }
+        .event-time {
+            font-family: monospace;
+            font-size: 11px;
+            color: #6e7681;
+            margin-top: 6px;
+        }
+
+        /* ── WebSocket status ── */
+        .ws-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #8b949e;
+        }
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #6e7681;
+            flex-shrink: 0;
+        }
+        .dot.connecting  { background: #d29922; animation: pulse 1.2s infinite; }
+        .dot.connected   { background: #3fb950; }
+        .dot.disconnected { background: #f85149; }
+        .dot.error       { background: #f85149; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: 0.3; }
+        }
+
+        /* ── Empty state ── */
+        .empty {
+            text-align: center;
+            padding: 40px 20px;
+            color: #484f58;
+        }
+        .empty svg { margin-bottom: 10px; opacity: 0.4; }
+        .empty p { font-size: 13px; line-height: 1.6; }
+
+        /* ── Toast ── */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1f4820;
+            color: #3fb950;
+            border: 1px solid #238636;
+            padding: 9px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            z-index: 1000;
+            animation: toastIn 0.2s ease;
+            white-space: nowrap;
+        }
+        .toast.error {
+            background: #4a1e1e;
+            color: #f85149;
+            border-color: #b62324;
+        }
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+            to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+
+        /* ── Scrollbar ── */
+        ::-webkit-scrollbar { width: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    </style>
+</head>
+<body>
+
+<header>
+    <span class="kafka-badge">KAFKA</span>
+    <h1>Order Events Dashboard</h1>
+    <div class="flow-hint">
+        <span>UI</span> → Producer → Kafka → Streams → Consumer → <span>WebSocket</span>
+    </div>
+</header>
+
+<div class="main">
+
+    <!-- ══════════════════ LEFT: PRODUCER ══════════════════ -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="panel-title">
+                <span class="tag tag-producer">PRODUCER</span>
+                <h2>Send Order Event</h2>
+            </div>
+            <span class="port-label">localhost:8081</span>
+        </div>
+
+        <div class="panel-content">
+            <form id="orderForm" autocomplete="off">
+                <div class="form-group">
+                    <label>Product</label>
+                    <input type="text" id="product" placeholder="e.g. Laptop, iPhone 15, Headphones..." required />
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Quantity</label>
+                        <input type="number" id="quantity" value="1" min="1" required />
+                    </div>
+                    <div class="form-group">
+                        <label>Price ($)</label>
+                        <input type="number" id="price" value="99.99" min="0" step="0.01" required />
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Status</label>
+                    <select id="status">
+                        <option value="CREATED">CREATED</option>
+                        <option value="CONFIRMED">CONFIRMED</option>
+                        <option value="SHIPPED">SHIPPED</option>
+                        <option value="DELIVERED">DELIVERED</option>
+                        <option value="CANCELLED">CANCELLED</option>
+                    </select>
+                </div>
+
+                <button type="submit" class="send-btn" id="sendBtn">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M1.724 1.053a.5.5 0 0 0-.714.545l1.403 4.85a.5.5 0 0 0 .397.354l5.69.953c.268.053.268.437 0 .49l-5.69.953a.5.5 0 0 0-.397.354l-1.403 4.85a.5.5 0 0 0 .714.545l13-6.5a.5.5 0 0 0 0-.894l-13-6.5z"/>
+                    </svg>
+                    Send to Kafka
+                </button>
+            </form>
+
+            <div class="section-title">
+                Sent Events
+                <span class="count-badge" id="sentCount">0</span>
+            </div>
+
+            <div id="sentItems">
+                <div class="empty" id="sentEmpty">
+                    <p>No events sent yet.<br>Fill the form above and click send.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- ══════════════════ RIGHT: CONSUMER ══════════════════ -->
+    <div class="panel">
+        <div class="panel-header">
+            <div class="panel-title">
+                <span class="tag tag-consumer">CONSUMER</span>
+                <h2>Live Event Stream</h2>
+            </div>
+            <div class="ws-status">
+                <div class="dot connecting" id="wsDot"></div>
+                <span id="wsText">Connecting...</span>
+                <span class="count-badge" id="receivedCount">0</span>
+            </div>
+        </div>
+
+        <div class="panel-content" id="consumerContent">
+            <div class="empty" id="consumerEmpty">
+                <svg width="32" height="32" viewBox="0 0 16 16" fill="#8b949e">
+                    <path d="M8 1a.5.5 0 0 1 .5.5V6h4a.5.5 0 0 1 0 1H8.5v4.5a.5.5 0 0 1-1 0V7H3a.5.5 0 0 1 0-1h4.5V1.5A.5.5 0 0 1 8 1z"/>
+                </svg>
+                <p>Waiting for events from Kafka Streams...<br>Send an order from the left panel.</p>
+            </div>
+            <div id="receivedItems"></div>
+        </div>
+    </div>
+</div>
+
+<!-- SockJS + STOMP -->
+<script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@stomp/stompjs@7/bundles/stomp.umd.min.js"></script>
+
+<script>
+    let sentCount = 0;
+    let receivedCount = 0;
+
+    // ══════════════════════════════════════
+    //  WebSocket → Consumer (port 8082)
+    // ══════════════════════════════════════
+    const stompClient = new StompJs.Client({
+        webSocketFactory: () => new SockJS('http://localhost:8082/ws'),
+        reconnectDelay: 5000,
+        onConnect: () => {
+            setWsStatus('connected', 'Connected');
+            stompClient.subscribe('/topic/orders', (msg) => {
+                try {
+                    const event = JSON.parse(msg.body);
+                    showReceivedEvent(event);
+                } catch (e) {
+                    console.error('Failed to parse event:', e);
+                }
+            });
+        },
+        onDisconnect: () => setWsStatus('disconnected', 'Disconnected'),
+        onStompError: (frame) => {
+            setWsStatus('error', 'STOMP Error');
+            console.error('STOMP error', frame);
+        },
+        onWebSocketClose: () => setWsStatus('disconnected', 'Reconnecting...'),
+    });
+
+    stompClient.activate();
+
+    function setWsStatus(state, text) {
+        document.getElementById('wsDot').className = 'dot ' + state;
+        document.getElementById('wsText').textContent = text;
+    }
+
+    // ══════════════════════════════════════
+    //  REST POST → Producer (port 8081)
+    // ══════════════════════════════════════
+    document.getElementById('orderForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const btn = document.getElementById('sendBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="animation:spin 1s linear infinite"><path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/></svg> Sending...';
+
+        const payload = {
+            product:  document.getElementById('product').value.trim(),
+            quantity: parseInt(document.getElementById('quantity').value),
+            price:    parseFloat(document.getElementById('price').value),
+            status:   document.getElementById('status').value,
+        };
+
+        try {
+            const res = await fetch('/api/orders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (res.ok) {
+                const text = await res.text();
+                const orderId = text.replace('Order event queued: ', '').trim();
+                addSentCard({ ...payload, orderId });
+                toast('Event sent → Kafka!');
+            } else {
+                toast('HTTP ' + res.status + ': ' + await res.text(), true);
+            }
+        } catch (err) {
+            toast('Network error: ' + err.message, true);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1.724 1.053a.5.5 0 0 0-.714.545l1.403 4.85a.5.5 0 0 0 .397.354l5.69.953c.268.053.268.437 0 .49l-5.69.953a.5.5 0 0 0-.397.354l-1.403 4.85a.5.5 0 0 0 .714.545l13-6.5a.5.5 0 0 0 0-.894l-13-6.5z"/></svg> Send to Kafka';
+        }
+    });
+
+    // ══════════════════════════════════════
+    //  Event card builders
+    // ══════════════════════════════════════
+    function addSentCard(event) {
+        sentCount++;
+        document.getElementById('sentCount').textContent = sentCount;
+        document.getElementById('sentEmpty')?.remove();
+
+        const container = document.getElementById('sentItems');
+        container.insertBefore(buildCard(event), container.firstChild);
+        trimChildren(container, 15);
+    }
+
+    function showReceivedEvent(event) {
+        receivedCount++;
+        document.getElementById('receivedCount').textContent = receivedCount;
+        document.getElementById('consumerEmpty')?.remove();
+
+        const container = document.getElementById('receivedItems');
+        container.insertBefore(buildCard(event), container.firstChild);
+        trimChildren(container, 50);
+    }
+
+    function buildCard(event) {
+        const div = document.createElement('div');
+        div.className = 'event-card ' + (event.status || '');
+
+        const id = (event.orderId || event.id || '—');
+        const shortId = id.length > 8 ? id.substring(0, 8) + '…' : id;
+
+        div.innerHTML = `
+          <div class="event-top">
+            <span class="event-id">#${esc(shortId)}</span>
+            <span class="status-pill ${esc(event.status || '')}">${esc(event.status || 'UNKNOWN')}</span>
+          </div>
+          <div class="event-product">${esc(event.product || '(no product)')}</div>
+          <div class="event-meta">
+            <span>Qty: ${event.quantity ?? '—'}</span>
+            <span>$${Number(event.price || 0).toFixed(2)}</span>
+          </div>
+          <div class="event-time">${formatTime(event.eventTime)}</div>
+        `;
+        return div;
+    }
+
+    function formatTime(eventTime) {
+        if (!eventTime) return new Date().toLocaleTimeString();
+        // LocalDateTime can arrive as ISO string or array [y,m,d,h,min,s,nano]
+        if (Array.isArray(eventTime)) {
+            const [y, m, d, h, min, s] = eventTime;
+            return new Date(y, m - 1, d, h, min, s).toLocaleTimeString();
+        }
+        return new Date(eventTime).toLocaleTimeString();
+    }
+
+    function trimChildren(el, max) {
+        while (el.children.length > max) el.removeChild(el.lastChild);
+    }
+
+    function esc(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    function toast(msg, isError = false) {
+        document.querySelector('.toast')?.remove();
+        const t = document.createElement('div');
+        t.className = 'toast' + (isError ? ' error' : '');
+        t.textContent = msg;
+        document.body.appendChild(t);
+        setTimeout(() => t.remove(), 3000);
+    }
+</script>
+
+<style>
+    @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</body>
+</html>

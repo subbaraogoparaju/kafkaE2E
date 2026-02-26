@@ -1,0 +1,17 @@
+server:
+  port: 8082
+
+spring:
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    streams:
+      application-id: order-streams-app
+      properties:
+        default.key.serde: org.apache.kafka.common.serialization.Serdes$StringSerde
+
+kafka:
+  topic:
+    order-events: order-events
