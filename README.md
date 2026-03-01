@@ -4,6 +4,8 @@ Real-time order event pipeline built with Apache Kafka, Kafka Streams, Spring Bo
 
 ## Architecture
 
+### Application Data Flow
+
 ```
 ┌─────────────────┐     order-events topic      ┌──────────────────────┐
 │  kafka-producer │ ───────────────────────────▶│   kafka-consumer     │
@@ -26,6 +28,38 @@ Real-time order event pipeline built with Apache Kafka, Kafka Streams, Spring Bo
                                          │  WS /topic/fraud-alerts
                                          ▼
                                   order-fraud-alerts topic
+```
+
+### Cluster Topology & MirrorMaker 2 Replication
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SOURCE CLUSTER  (kafka:9092 · kafka-2:9092)                                │
+│                                                                             │
+│  ┌─────────────────────────────────────────┐                                │
+│  │   order-events   (3 partitions)         │◀── kafka-producer  (publish)   │
+│  │                                         │──▶ kafka-consumer  (consume)   │
+│  │                                         │──▶ kafka-fraud-detector        │
+│  └────────────────────┬────────────────────┘                                │
+└───────────────────────┼─────────────────────────────────────────────────────┘
+                        │
+               ┌────────┴──────────┐
+               │   MirrorMaker 2   │
+               │   replicates:     │
+               │   · order-events  │
+               │   · offsets       │
+               │   · heartbeats    │
+               │   · checkpoints   │
+               └────────┬──────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  DEST CLUSTER  (kafka-dest:9092)                                            │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │   source.order-events   (MM2 prefixes topic name with source alias)   │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Modules
