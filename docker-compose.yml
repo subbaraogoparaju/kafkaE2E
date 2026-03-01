@@ -1,4 +1,6 @@
 services:
+
+  # ── Source cluster: Zookeeper ─────────────────────────────────────────────
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
     container_name: zookeeper
@@ -16,9 +18,10 @@ services:
       retries: 10
       start_period: 15s
 
+  # ── Source cluster: Broker 1 ──────────────────────────────────────────────
   kafka:
     image: confluentinc/cp-kafka:7.6.1
-    container_name: kafka-broker
+    container_name: kafka-broker-1
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -45,16 +48,115 @@ services:
       retries: 5
       start_period: 30s
 
+  # ── Source cluster: Broker 2 ──────────────────────────────────────────────
+  kafka-2:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka-broker-2
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "19093:9092"
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_2_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "kafka-2:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Destination cluster: Zookeeper ───────────────────────────────────────
+  zookeeper-dest:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: zookeeper-dest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_dest_data:/var/lib/zookeeper/data
+      - zookeeper_dest_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/2181 && echo ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ── Destination cluster: Broker ──────────────────────────────────────────
+  kafka-dest:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka-dest
+    depends_on:
+      zookeeper-dest:
+        condition: service_healthy
+    ports:
+      - "19094:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper-dest:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-dest:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_dest_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "kafka-dest:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── MirrorMaker 2 ─────────────────────────────────────────────────────────
+  # Replicates order-events from source cluster (kafka + kafka-2) to dest cluster.
+  # Replicated topic on dest: source.order-events
+  kafka-mirrormaker2:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka-mirrormaker2
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-dest:
+        condition: service_healthy
+    volumes:
+      - ./mm2/mm2.properties:/etc/mm2/mm2.properties
+    command: /usr/bin/connect-mirror-maker /etc/mm2/mm2.properties
+    environment:
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms256m"
+
+  # ── Spring Boot services ──────────────────────────────────────────────────
   kafka-producer:
     build: ./kafka-producer
     container_name: kafka-producer
     depends_on:
       kafka:
         condition: service_healthy
+      kafka-2:
+        condition: service_healthy
     ports:
       - "8081:8081"
     environment:
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092,kafka-2:9092
 
   kafka-consumer:
     build: ./kafka-consumer
@@ -62,10 +164,12 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      kafka-2:
+        condition: service_healthy
     ports:
       - "8082:8082"
     environment:
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092,kafka-2:9092
 
   kafka-fraud-detector:
     build: ./kafka-fraud-detector
@@ -73,10 +177,12 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      kafka-2:
+        condition: service_healthy
     ports:
       - "8083:8083"
     environment:
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092,kafka-2:9092
       SPRING_KAFKA_STREAMS_APPLICATION_ID: fraud-detector-app
     volumes:
       - fraud_detector_state:/tmp/kafka-streams
@@ -85,4 +191,8 @@ volumes:
   zookeeper_data:
   zookeeper_log:
   kafka_data:
+  kafka_2_data:
+  zookeeper_dest_data:
+  zookeeper_dest_log:
+  kafka_dest_data:
   fraud_detector_state:
