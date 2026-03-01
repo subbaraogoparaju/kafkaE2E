@@ -34,6 +34,7 @@ body {
 }
 .dot-blue  { background: #6366f1; }
 .dot-green { background: #22c55e; }
+.dot-red   { background: #ef4444; }
 
 .tag {
   font-size: 0.7rem;

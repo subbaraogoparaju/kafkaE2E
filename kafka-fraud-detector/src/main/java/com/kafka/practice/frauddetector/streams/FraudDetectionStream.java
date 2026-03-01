@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.support.serializer.JsonSerde;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
 /**
@@ -61,6 +62,12 @@ public class FraudDetectionStream {
     @Value("${fraud.detection.consecutive-threshold:3}")
     private int threshold;
 
+    private final SimpMessagingTemplate messagingTemplate;
+
+    public FraudDetectionStream(SimpMessagingTemplate messagingTemplate) {
+        this.messagingTemplate = messagingTemplate;
+    }
+
     /**
      * Builds and registers the fraud-detection topology into the shared
      * {@link StreamsBuilder} provided by {@code @EnableKafkaStreams}.
@@ -93,10 +100,12 @@ public class FraudDetectionStream {
                 .<String, FraudAlert>process(
                         () -> new FraudDetectionProcessor(FRAUD_STATE_STORE, threshold),
                         FRAUD_STATE_STORE)
-                // Log every alert, then sink to the fraud-alerts topic
-                .peek((key, alert) ->
-                        log.warn("[FRAUD DETECTED] {} consecutive CANCELLED events — last orderId={}",
-                                alert.getConsecutiveCount(), alert.getOrderId()))
+                // Log, push to WebSocket subscribers, then sink to the fraud-alerts topic
+                .peek((key, alert) -> {
+                    log.warn("[FRAUD DETECTED] {} consecutive CANCELLED events — last orderId={}",
+                            alert.getConsecutiveCount(), alert.getOrderId());
+                    messagingTemplate.convertAndSend("/topic/fraud-alerts", alert);
+                })
                 .to(fraudAlertsTopic, Produced.with(Serdes.String(), fraudAlertSerde));
     }
 }
