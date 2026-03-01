@@ -39,10 +39,11 @@ Real-time order event pipeline built with Apache Kafka, Kafka Streams, Spring Bo
 
 ## Kafka Topics
 
-| Topic | Producer | Consumer | Purpose |
-|---|---|---|---|
-| `order-events` | kafka-producer | kafka-consumer, kafka-fraud-detector | All order lifecycle events |
-| `order-fraud-alerts` | kafka-fraud-detector | — | Fraud alert output (also pushed via WebSocket to UI) |
+| Topic | Cluster | Producer | Consumer | Purpose |
+|---|---|---|---|---|
+| `order-events` | source | kafka-producer | kafka-consumer, kafka-fraud-detector | All order lifecycle events |
+| `order-fraud-alerts` | source | kafka-fraud-detector | — | Fraud alert output (also pushed via WebSocket to UI) |
+| `source.order-events` | dest | MirrorMaker2 | — | Replicated copy of `order-events` (MM2 prefixes source alias) |
 
 ## Prerequisites
 
@@ -205,6 +206,79 @@ Or override at runtime via environment variable:
 ```bash
 FRAUD_DETECTION_CONSECUTIVE_THRESHOLD=5
 ```
+
+---
+
+## MirrorMaker 2 — Cross-Cluster Replication
+
+The stack includes a two-broker source cluster (`kafka`, `kafka-2`) and a single-broker destination cluster (`kafka-dest`), connected by MirrorMaker 2.
+
+### Cluster layout
+
+| Cluster | Brokers | External ports | Zookeeper |
+|---|---|---|---|
+| Source | `kafka`, `kafka-2` | 19092, 19093 | `zookeeper:2181` |
+| Destination | `kafka-dest` | 19094 | `zookeeper-dest:2181` |
+
+### What MM2 replicates
+
+- **Topic:** `order-events` (source) → `source.order-events` (dest)
+- **Direction:** source → dest only (`dest->source.enabled = false`)
+- **Consumer group offsets** synced every 30 s (`sync.group.offsets.enabled = true`)
+- **Heartbeat and checkpoint** topics emitted for offset translation
+
+MM2 configuration lives in `mm2/mm2.properties`.
+
+### Verifying replication
+
+**1. Check replicated topic exists on dest:**
+
+```bash
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 --list
+# Expected: source.order-events (plus MM2 internal topics)
+```
+
+**2. Check end offsets on dest:**
+
+```bash
+docker exec kafka-dest kafka-run-class kafka.tools.GetOffsetShell \
+  --broker-list kafka-dest:9092 --topic source.order-events
+# source.order-events:0:NNN
+# source.order-events:1:NNN
+# source.order-events:2:NNN
+```
+
+**3. Send a test event and confirm it arrives on dest:**
+
+```bash
+# Send to source via producer REST API
+curl -s -X POST http://localhost:8081/api/orders \
+  -H "Content-Type: application/json" \
+  -d '{"orderId":"mm2-test","product":"Widget","quantity":1,"price":9.99,"status":"CREATED","message":"MM2 live check"}'
+
+# Wait ~5 s, then consume from dest
+docker exec kafka-dest kafka-console-consumer \
+  --bootstrap-server kafka-dest:9092 \
+  --topic source.order-events \
+  --partition 0 --offset latest --max-messages 1 --timeout-ms 8000
+```
+
+**Expected output on dest:**
+```json
+{"orderId":"mm2-test","product":"Widget","quantity":1,"price":9.99,"status":"CREATED","message":"MM2 live check"}
+```
+
+Replication latency observed: **< 10 seconds** end-to-end.
+
+### MM2 internal topics created on dest
+
+| Topic | Purpose |
+|---|---|
+| `mm2-configs.source.internal` | Connector configuration storage |
+| `mm2-offsets.source.internal` | Source offset tracking |
+| `mm2-status.source.internal` | Connector task status |
+| `source.checkpoints.internal` | Consumer group offset checkpoints |
+| `source.heartbeats` | Liveness heartbeats from source cluster |
 
 ---
 
