@@ -1,0 +1,20 @@
+server:
+  port: 8083
+
+spring:
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    streams:
+      application-id: fraud-detector-app
+
+kafka:
+  topic:
+    order-events: order-events
+    fraud-alerts: order-fraud-alerts
+
+fraud:
+  detection:
+    consecutive-threshold: 3
