@@ -5,26 +5,27 @@ Real-time order event pipeline built with Apache Kafka, Kafka Streams, Spring Bo
 ## Architecture
 
 ```
-┌─────────────────┐        order-events topic        ┌──────────────────────┐
-│  kafka-producer │ ─────────────────────────────────▶│   kafka-consumer     │
-│  (port 8081)    │                                   │   (port 8082)        │
-│                 │                                   │   Kafka Streams DSL  │
-│  REST API to    │         ┌─────────────────────────│   Routes by status   │
-│  publish order  │         │                         │   WebSocket push     │
-│  events         │         │                         └──────────┬───────────┘
-└─────────────────┘         │                                    │ WS /topic/orders
-                            │                                    │
-                            │    order-events topic              ▼
-                            │  ┌──────────────────────┐  ┌─────────────────┐
-                            └─▶│  kafka-fraud-detector│  │  react-client   │
-                               │  (port 8083)         │  │  (port 5173)    │
-                               │  Kafka Streams DSL   │  │                 │
-                               │  Global CANCELLED    │  │  ProducerPanel  │
-                               │  counter via state   │  │  ConsumerPanel  │
-                               │  store (RocksDB)     │  └─────────────────┘
-                               └──────────┬───────────┘
-                                          │
-                                          ▼ order-fraud-alerts topic
+┌─────────────────┐     order-events topic      ┌──────────────────────┐
+│  kafka-producer │ ───────────────────────────▶│   kafka-consumer     │
+│  (port 8081)    │                             │   (port 8082)        │
+│                 │        ┌────────────────────│   Kafka Streams DSL  │
+│  REST API to    │        │                    │   Routes by status   │
+│  publish order  │        │                    │   WebSocket push     │
+│  events         │        │                    └──────────┬───────────┘
+└─────────────────┘        │                               │ WS /topic/orders
+                           │                               │
+                           │  order-events topic           ▼
+                           │  ┌────────────────────┐  ┌──────────────────────┐
+                           └─▶│ kafka-fraud-detector│  │    react-client      │
+                              │ (port 8083)         │  │    (port 5173)       │
+                              │ Kafka Streams DSL   │  │                      │
+                              │ Global CANCELLED    │  │  ProducerPanel       │
+                              │ counter (RocksDB)   │  │  ConsumerPanel       │
+                              │ WebSocket push      ├─▶│  FraudPanel          │
+                              └──────────┬──────────┘  └──────────────────────┘
+                                         │  WS /topic/fraud-alerts
+                                         ▼
+                                  order-fraud-alerts topic
 ```
 
 ## Modules
@@ -33,15 +34,15 @@ Real-time order event pipeline built with Apache Kafka, Kafka Streams, Spring Bo
 |---|---|---|
 | `kafka-producer` | 8081 | REST API that publishes `OrderEvent` records to Kafka |
 | `kafka-consumer` | 8082 | Kafka Streams consumer; routes events by status; pushes to WebSocket |
-| `kafka-fraud-detector` | 8083 | Detects 3 consecutive `CANCELLED` events globally; writes to `order-fraud-alerts` |
-| `react-client` | 5173 | Vite/React UI — producer form + live consumer feed |
+| `kafka-fraud-detector` | 8083 | Detects 3 consecutive `CANCELLED` events globally; writes to `order-fraud-alerts`; pushes alerts via WebSocket |
+| `react-client` | 5173 | Vite/React UI — ProducerPanel (send orders) · ConsumerPanel (live feed) · FraudPanel (fraud alerts) |
 
 ## Kafka Topics
 
 | Topic | Producer | Consumer | Purpose |
 |---|---|---|---|
 | `order-events` | kafka-producer | kafka-consumer, kafka-fraud-detector | All order lifecycle events |
-| `order-fraud-alerts` | kafka-fraud-detector | — | Fraud alert output |
+| `order-fraud-alerts` | kafka-fraud-detector | — | Fraud alert output (also pushed via WebSocket to UI) |
 
 ## Prerequisites
 
@@ -151,6 +152,18 @@ POST http://localhost:8081/api/orders/sample
   "detectedAt": "2026-03-01T15:30:00"
 }
 ```
+
+### UI — FraudPanel
+
+The React `FraudPanel` connects to the fraud-detector's WebSocket endpoint and displays live alerts:
+
+| Detail | Value |
+|---|---|
+| WebSocket URL | `ws://localhost:8083/ws` (SockJS/STOMP) |
+| Subscription | `/topic/fraud-alerts` |
+| Payload | `FraudAlert` JSON (see schema above) |
+
+Each alert card shows the triggering `orderId`, the `CANCELLED` status badge, the consecutive count, and the detection timestamp. The panel border flashes red on every new alert.
 
 ### Test fraud detection manually
 
