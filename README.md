@@ -34,10 +34,11 @@ Real-time order event pipeline built with Apache Kafka, Kafka Streams, Spring Bo
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  SOURCE CLUSTER  (kafka:9092 · kafka-2:9092)                                │
+│  SOURCE CLUSTER  (kafka:9092 · kafka-2:9092 · kafka-3:9092)                 │
+│  RF=3  min.isr=2  unclean.leader.election=false                             │
 │                                                                             │
 │  ┌─────────────────────────────────────────┐                                │
-│  │   order-events   (3 partitions)         │◀── kafka-producer  (publish)   │
+│  │   order-events   (3 partitions, RF=3)   │◀── kafka-producer  (publish)   │
 │  │                                         │──▶ kafka-consumer  (consume)   │
 │  │                                         │──▶ kafka-fraud-detector        │
 │  └────────────────────┬────────────────────┘                                │
@@ -245,14 +246,14 @@ FRAUD_DETECTION_CONSECUTIVE_THRESHOLD=5
 
 ## MirrorMaker 2 — Cross-Cluster Replication
 
-The stack includes a two-broker source cluster (`kafka`, `kafka-2`) and a single-broker destination cluster (`kafka-dest`), connected by MirrorMaker 2.
+The stack includes a three-broker source cluster (`kafka`, `kafka-2`, `kafka-3`) and a single-broker destination cluster (`kafka-dest`), connected by MirrorMaker 2.
 
 ### Cluster layout
 
-| Cluster | Brokers | External ports | Zookeeper |
-|---|---|---|---|
-| Source | `kafka`, `kafka-2` | 19092, 19093 | `zookeeper:2181` |
-| Destination | `kafka-dest` | 19094 | `zookeeper-dest:2181` |
+| Cluster | Brokers | External ports | Zookeeper | RF | min.isr |
+|---|---|---|---|---|---|
+| Source | `kafka`, `kafka-2`, `kafka-3` | 19092, 19093, 19095 | `zookeeper:2181` | 3 | 2 |
+| Destination | `kafka-dest` | 19094 | `zookeeper-dest:2181` | 1 | 1 |
 
 ### What MM2 replicates
 
@@ -308,11 +309,64 @@ Replication latency observed: **< 10 seconds** end-to-end.
 
 | Topic | Purpose |
 |---|---|
-| `mm2-configs.source.internal` | Connector configuration storage |
-| `mm2-offsets.source.internal` | Source offset tracking |
-| `mm2-status.source.internal` | Connector task status |
+| `mm2-configs.source.internal` | Connector configuration storage (RF=1, dest cluster) |
+| `mm2-offsets.source.internal` | Source offset tracking (RF=1, dest cluster) |
+| `mm2-status.source.internal` | Connector task status (RF=1, dest cluster) |
 | `source.checkpoints.internal` | Consumer group offset checkpoints |
 | `source.heartbeats` | Liveness heartbeats from source cluster |
+
+### MM2 operational notes
+
+**Health check — verify MM2 is truly running:**
+After startup, confirm the three Connect storage topics appeared on the dest cluster within 30 s.
+If they are missing, MM2 is silently broken (see gotchas below).
+
+```bash
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 --list
+# Must include: mm2-configs.source.internal, mm2-offsets.source.internal, mm2-status.source.internal
+```
+
+**Resetting MM2 after `mm2.properties` changes:**
+MM2's embedded Kafka Connect caches connector configs in `mm2-configs.source.internal`.
+A container restart reads from that cache — not from the properties file.
+To force a clean re-registration, delete the three storage topics before restarting:
+
+```bash
+docker stop kafka-mirrormaker2
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 \
+  --delete --topic mm2-configs.source.internal
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 \
+  --delete --topic mm2-offsets.source.internal
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 \
+  --delete --topic mm2-status.source.internal
+docker compose up -d kafka-mirrormaker2
+```
+
+> **Note:** deleting `mm2-offsets.source.internal` resets MM2's position — it will re-replicate
+> from the beginning of the source topic, which may produce duplicates on the dest cluster.
+
+### Failover recipe (manual)
+
+MM2 keeps consumer group offsets synced to the dest cluster every 30 s
+(`sync.group.offsets.enabled = true`). On source cluster failure, switch consumers by updating
+two environment variables in `docker-compose.yml` and recreating the container — no code change:
+
+```yaml
+# kafka-consumer — failover to dest cluster
+environment:
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-dest:9092
+  KAFKA_TOPIC_ORDER_EVENTS: source.order-events   # MM2 prefixes source alias by default
+```
+
+The consumer will resume from the last synced offset with at most 30 s of re-processing and zero
+data loss.
+
+### Known limitations
+
+| Issue | Detail |
+|---|---|
+| `topics.rename.format` ignored | `DefaultReplicationPolicy.formatRemoteTopic()` in Kafka 3.6.x (cp-kafka:7.6.1) hardcodes `sourceAlias.topic` regardless of this setting. The config is stored but silently not applied. Replicated topic is always `source.order-events`. |
+| Connect storage RF must match dest broker count | `offset/status/config.storage.replication.factor` in `mm2.properties` control topics created on the **dest** cluster. Setting these above the dest broker count (1 here) prevents topic creation and silently breaks MM2. Keep at RF=1. |
 
 ---
 
