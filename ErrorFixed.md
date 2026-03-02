@@ -285,6 +285,115 @@ docker compose up -d        # all internal topics created fresh with RF=3, min.i
 
 ---
 
+## 13. MM2 Silently Not Replicating — Connect Storage Topics Missing on Dest
+
+**Error**
+No error message. MM2 container shows `Up` but `mm2-configs.source.internal`,
+`mm2-offsets.source.internal`, and `mm2-status.source.internal` never appear on the dest cluster.
+Replication does not happen.
+
+**Why it happens**
+The three Kafka Connect internal storage topics are written to the **dest** cluster by MM2's embedded
+Connect worker. Setting `offset.storage.replication.factor`, `status.storage.replication.factor`, or
+`config.storage.replication.factor` to a value greater than the number of brokers on the dest cluster
+causes topic creation to fail silently. MM2 keeps running but never registers its connectors.
+
+In this project the dest cluster has 1 broker, so RF must be 1 for these topics.
+
+**Fix**
+```properties
+# mm2.properties — dest has 1 broker
+offset.storage.replication.factor  = 1
+status.storage.replication.factor  = 1
+config.storage.replication.factor  = 1
+```
+
+After correcting the values, stop MM2, then start it again. If the topics were partially created,
+delete them first:
+```bash
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 \
+  --delete --topic mm2-configs.source.internal
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 \
+  --delete --topic mm2-offsets.source.internal
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 \
+  --delete --topic mm2-status.source.internal
+docker compose up -d kafka-mirrormaker2
+```
+
+**Verification**
+Within 30 seconds of startup, all three topics must appear on the dest cluster:
+```bash
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 --list
+# expected: mm2-configs.source.internal, mm2-offsets.source.internal, mm2-status.source.internal
+```
+
+---
+
+## 14. `topics.rename.format` Has No Effect in cp-kafka:7.6.1
+
+**Error**
+```properties
+# mm2.properties
+source->dest.topics.rename.format = ${topic}
+```
+Expected: replicated topic on dest named `order-events`.
+Actual: replicated topic on dest still named `source.order-events`.
+
+**Why it happens**
+`DefaultReplicationPolicy.formatRemoteTopic()` in Apache Kafka 3.6.x (Confluent cp-kafka:7.6.1)
+hardcodes the naming logic as `sourceClusterAlias + separator + topic`. The `topics.rename.format`
+config is stored in `mm2-configs.source.internal` and passed to connector tasks, but the method
+never reads it. The setting is silently ignored.
+
+**Fix**
+Remove `topics.rename.format` from mm2.properties — it is a no-op in this version.
+
+Accept the default `source.order-events` naming on the dest cluster. On failover, switch consumers
+via two environment variables — no code change needed:
+
+```yaml
+# kafka-consumer in docker-compose.yml on failover
+environment:
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka-dest:9092
+  KAFKA_TOPIC_ORDER_EVENTS: source.order-events
+```
+
+`kafka.topic.order-events=${KAFKA_TOPIC_ORDER_EVENTS:order-events}` is already in
+`application.properties`, so the consumer picks this up on restart.
+
+---
+
+## 15. MM2 Connector Config Not Updated After `mm2.properties` Change
+
+**Error**
+Updated `mm2.properties` and restarted the MM2 container. The old connector configuration is still
+active — the change has no effect.
+
+**Why it happens**
+MM2's embedded Kafka Connect caches connector configurations in `mm2-configs.source.internal` on the
+dest cluster. A container restart reads from this cached config, not from mm2.properties, so property
+changes are ignored.
+
+**Fix**
+Stop MM2, delete the three Connect storage topics from the dest cluster, then restart. MM2 will
+re-read mm2.properties and register connectors fresh:
+
+```bash
+docker stop kafka-mirrormaker2
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 \
+  --delete --topic mm2-configs.source.internal
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 \
+  --delete --topic mm2-offsets.source.internal
+docker exec kafka-dest kafka-topics --bootstrap-server kafka-dest:9092 \
+  --delete --topic mm2-status.source.internal
+docker compose up -d kafka-mirrormaker2
+```
+
+Note: deleting `mm2-offsets.source.internal` resets MM2's position in the source topic.
+MM2 will re-replicate from the beginning, which may cause duplicates on the dest cluster.
+
+---
+
 ## Summary Table
 
 | # | Error | Root Cause | Fix |
@@ -301,3 +410,6 @@ docker compose up -d        # all internal topics created fresh with RF=3, min.i
 | 10 | Topic recreated with RF=1 | Old JAR deployed; auto-create used broker default | Rebuild JAR, delete topic, restart producer |
 | 11 | Topic stays RF=2 after broker-3 added | Existing topic RF immutable; running containers had old env | Recreate broker containers, delete topic, redeploy producer JAR |
 | 12 | `COORDINATOR_NOT_AVAILABLE` loop | `__consumer_offsets` RF=2 but broker min.isr=2 after restarts | Set `min.insync.replicas=1` on `__consumer_offsets`; permanent fix: full reset |
+| 13 | MM2 running but not replicating, no error | `offset/status/config.storage.replication.factor` > dest broker count; Connect topics never created | Set all three to RF=1 (dest has 1 broker); delete stale topics and restart MM2 |
+| 14 | `topics.rename.format=${topic}` has no effect | `DefaultReplicationPolicy.formatRemoteTopic()` in Kafka 3.6.x ignores the config | Remove the setting; accept `source.order-events`; use env var on failover |
+| 15 | mm2.properties change ignored after restart | Connector config cached in `mm2-configs.source.internal`; restart reads cache not file | Stop MM2, delete all three `mm2-*.source.internal` topics from dest, restart MM2 |
